@@ -1,11 +1,12 @@
 module OffsitePayments #:nodoc:
   module Integrations #:nodoc:
     module BitPay
+      API_V1_URL = 'https://bitpay.com/api/invoice'
+      API_V1_TOKEN_REGEX = /^[^0OIl]{44,}$/
+      API_V2_URL = 'https://bitpay.com/invoices'
+
       mattr_accessor :service_url
       self.service_url = 'https://bitpay.com/invoice'
-
-      mattr_accessor :invoicing_url
-      self.invoicing_url = 'https://bitpay.com/api/invoice'
 
       def self.notification(post, options = {})
         Notification.new(post, options)
@@ -19,16 +20,36 @@ module OffsitePayments #:nodoc:
         Return.new(query_string)
       end
 
+      def self.v2_api_token?(api_token)
+        API_V1_TOKEN_REGEX.match(api_token)
+      end
+
+      def self.invoicing_url(api_token)
+        if v2_api_token?(api_token)
+          API_V2_URL
+        else
+          API_V1_URL
+        end
+      end
+
       class Helper < OffsitePayments::Helper
         def initialize(order_id, account, options)
           super
           @account = account
+          @options = options
 
           add_field('posData', {'orderId' => order_id}.to_json)
           add_field('fullNotifications', true)
           add_field('transactionSpeed', 'high')
-        end
+          add_field('token', @options[:credential2])
 
+          if API_V1_TOKEN_REGEX.match(@options[:credential2])
+            self.invoicing_url = 'https://bitpay.com/invoices'
+          end
+          
+        end
+        
+       
         mapping :amount, 'price'
         mapping :order, 'orderID'
         mapping :currency, 'currency'
@@ -63,7 +84,7 @@ module OffsitePayments #:nodoc:
         private
 
         def create_invoice
-          uri = URI.parse(BitPay.invoicing_url)
+          uri = URI.parse(BitPay.invoicing_url(@options[:credential2]))
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = true
 
@@ -115,13 +136,13 @@ module OffsitePayments #:nodoc:
         end
 
         def acknowledge(authcode = nil)
-          uri = URI.parse("#{OffsitePayments::Integrations::BitPay.invoicing_url}/#{transaction_id}")
+          uri = URI.parse("#{OffsitePayments::Integrations::BitPay.invoicing_url(@options[:credential2])}/#{transaction_id}")
 
           http = Net::HTTP.new(uri.host, uri.port)
           http.use_ssl = true
 
           request = Net::HTTP::Get.new(uri.path)
-          request.basic_auth @options[:credential1], ''
+          request.basic_auth @options[:credential2], ''
 
           response = http.request(request)
 
